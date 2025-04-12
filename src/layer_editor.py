@@ -45,19 +45,36 @@ class LayerListDialog(tk.Toplevel):
             self.listbox.insert(tk.END, f"{i+1}: {layer.name}")
     
     def add_layer(self):
-        tile_folder = filedialog.askdirectory(title="Select Tile Folder")
-        if tile_folder:
-            layer_name = simpledialog.askstring("Layer Name", "Enter a name for this layer:", 
-                                               initialvalue="Raster Layer")
-            if layer_name:
-                import tiles
-                layer = tiles.RasterTileSource(tile_folder, name=layer_name)
-                self.project.add_layer(layer)
-                if hasattr(layer, 'load_tiles'):
-                    layer.load_tiles()
-                if hasattr(layer, 'calculate_bounds'):
-                    layer.calculate_bounds()
-                self.refresh_list()
+        # Create a dialog to choose layer type
+        layer_type = simpledialog.askstring("Layer Type", "Enter layer type (tile/geojson):", initialvalue="tile")
+        
+        if layer_type and layer_type.lower() == "tile":
+            tile_folder = filedialog.askdirectory(title="Select Tile Folder")
+            if tile_folder:
+                layer_name = simpledialog.askstring("Layer Name", "Enter a name for this layer:", 
+                                                  initialvalue="Raster Layer")
+                if layer_name:
+                    import tiles
+                    layer = tiles.RasterTileSource(tile_folder, name=layer_name, project=self.project)
+                    self.project.add_layer(layer)
+                    if hasattr(layer, 'load_tiles'):
+                        layer.load_tiles()
+                    if hasattr(layer, 'calculate_bounds'):
+                        layer.calculate_bounds()
+                    self.refresh_list()
+        elif layer_type and layer_type.lower() == "geojson":
+            geojson_file = filedialog.askopenfilename(
+                title="Select GeoJSON File",
+                filetypes=[("GeoJSON Files", "*.geojson *.json"), ("All Files", "*.*")]
+            )
+            if geojson_file:
+                layer_name = simpledialog.askstring("Layer Name", "Enter a name for this layer:", 
+                                                  initialvalue="GeoJSON Layer")
+                if layer_name:
+                    from geojson_layer import GeoJSONLayer
+                    layer = GeoJSONLayer(geojson_file, name=layer_name, project=self.project)
+                    self.project.add_layer(layer)
+                    self.refresh_list()
     
     def edit_layer(self):
         selection = self.listbox.curselection()

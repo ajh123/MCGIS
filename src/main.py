@@ -4,6 +4,7 @@ import json
 import tiles  # For RasterTileSource type checking
 from project import Project
 from layer_editor import LayerListDialog
+from geojson_layer import GeoJSONLayer
 
 class ProjectManager:
     def __init__(self):
@@ -40,6 +41,13 @@ class ProjectManager:
                     "tile_folder": layer.tile_folder
                 }
                 project_data["layers"].append(layer_data)
+            elif isinstance(layer, GeoJSONLayer):
+                layer_data = {
+                    "type": "GeoJSONLayer",
+                    "name": layer.name,
+                    "geojson_file": layer.geojson_file
+                }
+                project_data["layers"].append(layer_data)
         
         with open(path, 'w') as f:
             json.dump(project_data, f, indent=2)
@@ -67,6 +75,12 @@ class ProjectManager:
                 if layer_data["type"] == "RasterTileSource":
                     layer = tiles.RasterTileSource(
                         layer_data["tile_folder"],
+                        name=layer_data["name"]
+                    )
+                    project.add_layer(layer)
+                elif layer_data["type"] == "GeoJSONLayer":
+                    layer = GeoJSONLayer(
+                        layer_data["geojson_file"],
                         name=layer_data["name"]
                     )
                     project.add_layer(layer)
@@ -104,6 +118,7 @@ class MapViewer(tk.Frame):
         self.menu_bar.add_cascade(label="Project", menu=project_menu)
         project_menu.add_command(label="Properties", command=self.edit_project_properties)
         project_menu.add_command(label="Add Tile Layer", command=self.add_tile_layer)
+        project_menu.add_command(label="Add GeoJSON Layer", command=self.add_geojson_layer)
         project_menu.add_command(label="Manage Layers", command=self.manage_layers)
         
         # Set up the canvas and UI elements
@@ -171,12 +186,25 @@ class MapViewer(tk.Frame):
             self.project.name = name
             self.redraw()
     
+    def add_geojson_layer(self):
+        geojson_file = filedialog.askopenfilename(
+            title="Select GeoJSON File",
+            filetypes=[("GeoJSON Files", "*.geojson *.json"), ("All Files", "*.*")]
+        )
+        if geojson_file:
+            layer_name = simpledialog.askstring("Layer Name", "Enter a name for this layer:", initialvalue="GeoJSON Layer")
+            if layer_name:
+                from geojson_layer import GeoJSONLayer
+                layer = GeoJSONLayer(geojson_file, name=layer_name, project=self.project)
+                self.project.add_layer(layer)
+                self.redraw()
+
     def add_tile_layer(self):
         tile_folder = filedialog.askdirectory(title="Select Tile Folder")
         if tile_folder:
             layer_name = simpledialog.askstring("Layer Name", "Enter a name for this layer:", initialvalue="Raster Layer")
             if layer_name:
-                layer = tiles.RasterTileSource(tile_folder, name=layer_name)
+                layer = tiles.RasterTileSource(tile_folder, name=layer_name, project=self.project)
                 self.project.add_layer(layer)
                 if hasattr(layer, 'load_tiles'):
                     layer.load_tiles()
@@ -209,40 +237,26 @@ class MapViewer(tk.Frame):
         self.update_scroll_region()
         # For the window title, locate a RasterTileSource layer if present.
         title = f"{self.project.name} - MCGIS"
-        for layer in self.project.layers:
-            if isinstance(layer, tiles.RasterTileSource):
-                title = f"Zoom ({self.project.zoom:.2f}) - {title}"
-                break
+        title = f"Zoom ({self.project.zoom:.2f}) - {title}"
 
         self.master.title(title)
 
     def update_scroll_region(self):
-        # Update scroll region based on a RasterTileSource layer if found.
-        for layer in self.project.layers:
-            if isinstance(layer, tiles.RasterTileSource):
-                w = int(layer.world_width * self.project.zoom)
-                h = int(layer.world_height * self.project.zoom)
-                self.canvas.config(scrollregion=(0, 0, w, h))
-                break
+        w = int(self.project.world_width * self.project.zoom)
+        h = int(self.project.world_height * self.project.zoom)
+        self.canvas.config(scrollregion=(0, 0, w, h))
 
     def scroll_x(self, *args):
         self.canvas.xview(*args)
         frac = float(self.canvas.xview()[0])
         # Adjust the horizontal pan offset.
-        for layer in self.project.layers:
-            if isinstance(layer, tiles.RasterTileSource):
-                self.project.offset_x = -frac * (layer.world_width * self.project.zoom)
-                break
+        self.project.offset_x = -frac * (self.project.world_width * self.project.zoom)
         self.redraw()
 
     def scroll_y(self, *args):
         self.canvas.yview(*args)
         frac = float(self.canvas.yview()[0])
-        # Adjust the vertical pan offset.
-        for layer in self.project.layers:
-            if isinstance(layer, tiles.RasterTileSource):
-                self.project.offset_y = -frac * (layer.world_height * self.project.zoom)
-                break
+        self.project.offset_y = -frac * (self.project.world_height * self.project.zoom)
         self.redraw()
 
     def start_pan(self, event):
@@ -266,29 +280,23 @@ class MapViewer(tk.Frame):
         cx = self.canvas.canvasx(event.x)
         cy = self.canvas.canvasy(event.y)
         # Convert these to world coordinates using the old zoom and pan.
-        for layer in self.project.layers:
-            if isinstance(layer, tiles.RasterTileSource):
-                game_x = (cx - self.project.offset_x) / old_zoom + layer.min_x
-                game_z = (cy - self.project.offset_y) / old_zoom + layer.min_z
+        game_x = (cx - self.project.offset_x) / old_zoom + self.project.min_x
+        game_z = (cy - self.project.offset_y) / old_zoom + self.project.min_z
 
-                # Adjust offsets so that the game coordinate under the mouse remains fixed.
-                self.project.offset_x = cx - new_zoom * (game_x - layer.min_x)
-                self.project.offset_y = cy - new_zoom * (game_z - layer.min_z)
-                break
+        # Adjust offsets so that the game coordinate under the mouse remains fixed.
+        self.project.offset_x = cx - new_zoom * (game_x - self.project.min_x)
+        self.project.offset_y = cy - new_zoom * (game_z - self.project.min_z)
         self.project.zoom = new_zoom
         self.redraw()
 
     def update_cursor_position(self, event):
         # Display the cursor's world coordinates based on the first RasterTileSource found.
-        for layer in self.project.layers:
-            if isinstance(layer, tiles.RasterTileSource):
-                cx = self.canvas.canvasx(event.x)
-                cy = self.canvas.canvasy(event.y)
-                # Add 0.5 so that the result rounds to the block centre
-                world_x = int((cx - self.project.offset_x) / self.project.zoom + layer.min_x + 0.5)
-                world_z = int((cy - self.project.offset_y) / self.project.zoom + layer.min_z + 0.5)
-                self.coord_label.config(text=f"Cursor at: X={world_x}, Z={world_z}")
-                break
+            cx = self.canvas.canvasx(event.x)
+            cy = self.canvas.canvasy(event.y)
+            # Add 0.5 so that the result rounds to the block centre
+            world_x = int((cx - self.project.offset_x) / self.project.zoom + self.project.min_x + 0.5)
+            world_z = int((cy - self.project.offset_y) / self.project.zoom + self.project.min_z + 0.5)
+            self.coord_label.config(text=f"Cursor at: X={world_x}, Z={world_z}")
 
 
 def main():

@@ -31,15 +31,10 @@ class Tile:
         self.tk_image = ImageTk.PhotoImage(self.image.resize(new_size, Image.NEAREST))
 
 class RasterTileSource(Layer):
-    def __init__(self, tile_folder, name="Raster Tile Layer"):
-        super().__init__(name)
+    def __init__(self, tile_folder, name="Raster Tile Layer", project=None):
+        super().__init__(name, project)
         self.tile_folder = tile_folder
         self.tiles = []
-        # Bounds values in game/world coordinates.
-        self.world_width = 0
-        self.world_height = 0
-        self.min_x = 0
-        self.min_z = 0
 
     def load_tiles(self):
         for fname in os.listdir(self.tile_folder):
@@ -59,10 +54,10 @@ class RasterTileSource(Layer):
         max_x = max(tile.game_x + tile.image.width for tile in self.tiles)
         min_z = min(tile.game_z for tile in self.tiles)
         max_z = max(tile.game_z + tile.image.height for tile in self.tiles)
-        self.world_width = max_x - min_x
-        self.world_height = max_z - min_z
-        self.min_x = min_x
-        self.min_z = min_z
+        self.project.world_width = max_x - min_x
+        self.project.world_height = max_z - min_z
+        self.project.min_x = min_x
+        self.project.min_z = min_z
 
     def draw(self, canvas, view_left, view_top, view_right, view_bottom, zoom, offset_x, offset_y):
         """
@@ -71,8 +66,8 @@ class RasterTileSource(Layer):
         """
         for tile in self.tiles:
             # Calculate canvas coordinates for the tile.
-            canvas_x1 = (tile.game_x - self.min_x) * zoom + offset_x
-            canvas_y1 = (tile.game_z - self.min_z) * zoom + offset_y
+            canvas_x1 = (tile.game_x - self.project.min_x) * zoom + offset_x
+            canvas_y1 = (tile.game_z - self.project.min_z) * zoom + offset_y
             tile_width = tile.image.width * zoom
             tile_height = tile.image.height * zoom
             canvas_x2 = canvas_x1 + tile_width

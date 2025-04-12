@@ -6,9 +6,14 @@ class Project:
         self.zoom = 1.0
         self.offset_x = 0
         self.offset_y = 0
+        self.min_x = 0
+        self.min_z = 0
+        self.world_width = 0
+        self.world_height = 0
 
     def add_layer(self, layer):
         self.layers.append(layer)
+        layer.project = self
 
     def remove_layer(self, layer):
         if layer in self.layers:

@@ -1,6 +1,7 @@
 class Layer:
-    def __init__(self, name="Layer"):
+    def __init__(self, name="Layer", project=None):
         self.name = name
+        self.project = project
 
     def draw(self, canvas, view_left, view_top, view_right, view_bottom, zoom, offset_x, offset_y):
         """
