@@ -1,6 +1,9 @@
+# tiles.py
+
 import re
 import os
 from PIL import Image, ImageTk
+from layers import Layer
 
 TILE_PATTERN = re.compile(r'^(\d+)_(\d+)_x(-?\d+)_z(-?\d+)\.png$')
 
@@ -27,17 +30,16 @@ class Tile:
         new_size = (int(self.image.width * zoom), int(self.image.height * zoom))
         self.tk_image = ImageTk.PhotoImage(self.image.resize(new_size, Image.NEAREST))
 
-class RasterTileSource:
-    def __init__(self, tile_folder, zoom=1.0):
+class RasterTileSource(Layer):
+    def __init__(self, tile_folder, name="Raster Tile Layer"):
+        super().__init__(name)
         self.tile_folder = tile_folder
-        self.zoom = zoom
         self.tiles = []
+        # Bounds values in game/world coordinates.
         self.world_width = 0
         self.world_height = 0
         self.min_x = 0
         self.min_z = 0
-        self.offset_x = 0
-        self.offset_y = 0
 
     def load_tiles(self):
         for fname in os.listdir(self.tile_folder):
@@ -46,7 +48,8 @@ class RasterTileSource:
                 tile_x, tile_z, game_x, game_z = match.groups()
                 path = os.path.join(self.tile_folder, fname)
                 tile = Tile(path, tile_x, tile_z, game_x, game_z)
-                tile.update_image(self.zoom)
+                # No zoom here; the update_image call will be done in draw() using the
+                # project-level zoom value.
                 self.tiles.append(tile)
 
     def calculate_bounds(self):
@@ -60,3 +63,44 @@ class RasterTileSource:
         self.world_height = max_z - min_z
         self.min_x = min_x
         self.min_z = min_z
+
+    def draw(self, canvas, view_left, view_top, view_right, view_bottom, zoom, offset_x, offset_y):
+        """
+        Draw each tile that falls within the visible region, using the project-level
+        zoom and pan (offset) parameters.
+        """
+        for tile in self.tiles:
+            # Calculate canvas coordinates for the tile.
+            canvas_x1 = (tile.game_x - self.min_x) * zoom + offset_x
+            canvas_y1 = (tile.game_z - self.min_z) * zoom + offset_y
+            tile_width = tile.image.width * zoom
+            tile_height = tile.image.height * zoom
+            canvas_x2 = canvas_x1 + tile_width
+            canvas_y2 = canvas_y1 + tile_height
+
+            is_visible = (
+                canvas_x1 < view_right and
+                canvas_x2 > view_left and
+                canvas_y1 < view_bottom and
+                canvas_y2 > view_top
+            )
+
+            if is_visible:
+                tile.update_image(zoom)
+                if tile.canvas_id is None:
+                    tile.canvas_id = canvas.create_image(
+                        canvas_x1, canvas_y1, anchor="nw", image=tile.tk_image
+                    )
+                else:
+                    canvas.coords(tile.canvas_id, canvas_x1, canvas_y1)
+                    canvas.itemconfig(tile.canvas_id, image=tile.tk_image)
+            else:
+                if tile.canvas_id is not None:
+                    canvas.delete(tile.canvas_id)
+                    tile.canvas_id = None
+
+    def update(self):
+        """
+        Update internal states (for example, recalc bounds).
+        """
+        self.calculate_bounds()

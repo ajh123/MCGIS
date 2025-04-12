@@ -1,12 +1,15 @@
-import tkinter as tk
-import tiles
+# main.py
 
+import tkinter as tk
+import tiles  # For RasterTileSource type checking
+from project import Project
 
 class MapViewer(tk.Frame):
-    def __init__(self, master, tile_folder):
+    def __init__(self, master, project):
         super().__init__(master)
         self.master = master
-        self.tileSource = tiles.RasterTileSource(tile_folder)
+        self.project = project
+
         self.drag_start = None
 
         self.canvas = tk.Canvas(
@@ -29,14 +32,19 @@ class MapViewer(tk.Frame):
         self.canvas.bind("<B1-Motion>", self.do_pan)
         self.canvas.bind("<MouseWheel>", self.zoom_handler)
         self.canvas.bind("<Motion>", self.update_cursor_position)
-        self.bind("<Configure>", lambda e: self.draw_tiles())
+        self.bind("<Configure>", lambda e: self.redraw())
 
-        self.tileSource.load_tiles()
-        self.tileSource.calculate_bounds()
-        self.draw_tiles()
+        # Initialise layers.
+        for layer in self.project.layers:
+            if hasattr(layer, 'load_tiles'):
+                layer.load_tiles()
+            if hasattr(layer, 'calculate_bounds'):
+                layer.calculate_bounds()
+        self.redraw()
 
-
-    def draw_tiles(self):
+    def redraw(self):
+        # Do not call self.canvas.delete("all") so that
+        # each layer can manage its own tile items.
         self.canvas.update_idletasks()
         canvas_width = self.canvas.winfo_width()
         canvas_height = self.canvas.winfo_height()
@@ -49,55 +57,46 @@ class MapViewer(tk.Frame):
         view_right = view_left + canvas_width
         view_bottom = view_top + canvas_height
 
-        # Update or remove each tile based on its visible position.
-        for tile in self.tileSource.tiles:
-            canvas_x1 = (tile.game_x - self.tileSource.min_x) * self.tileSource.zoom + self.tileSource.offset_x
-            canvas_y1 = (tile.game_z - self.tileSource.min_z) * self.tileSource.zoom + self.tileSource.offset_y
-            tile_width = tile.image.width * self.tileSource.zoom
-            tile_height = tile.image.height * self.tileSource.zoom
-            canvas_x2 = canvas_x1 + tile_width
-            canvas_y2 = canvas_y1 + tile_height
-
-            is_visible = (
-                canvas_x1 < view_right and
-                canvas_x2 > view_left and
-                canvas_y1 < view_bottom and
-                canvas_y2 > view_top
-            )
-
-            if is_visible:
-                tile.update_image(self.tileSource.zoom)
-                if tile.canvas_id is None:
-                    tile.canvas_id = self.canvas.create_image(
-                        canvas_x1, canvas_y1, anchor="nw", image=tile.tk_image
-                    )
-                else:
-                    self.canvas.coords(tile.canvas_id, canvas_x1, canvas_y1)
-                    self.canvas.itemconfig(tile.canvas_id, image=tile.tk_image)
-            else:
-                if tile.canvas_id is not None:
-                    self.canvas.delete(tile.canvas_id)
-                    tile.canvas_id = None
-
+        # Delegate drawing to the project, which passes the current zoom and pan to its layers.
+        self.project.draw(self.canvas, view_left, view_top, view_right, view_bottom)
         self.update_scroll_region()
-        self.master.title(f"Map Viewer – Zoom: {self.tileSource.zoom:.2f}")
+        # For the window title, locate a RasterTileSource layer if present.
+        title = f"{self.project.name} - MCGIS"
+        for layer in self.project.layers:
+            if isinstance(layer, tiles.RasterTileSource):
+                title = f"Zoom ({self.project.zoom:.2f}) - {title}"
+                break
+
+        self.master.title(title)
 
     def update_scroll_region(self):
-        w = int(self.tileSource.world_width * self.tileSource.zoom)
-        h = int(self.tileSource.world_height * self.tileSource.zoom)
-        self.canvas.config(scrollregion=(0, 0, w, h))
+        # Update scroll region based on a RasterTileSource layer if found.
+        for layer in self.project.layers:
+            if isinstance(layer, tiles.RasterTileSource):
+                w = int(layer.world_width * self.project.zoom)
+                h = int(layer.world_height * self.project.zoom)
+                self.canvas.config(scrollregion=(0, 0, w, h))
+                break
 
     def scroll_x(self, *args):
         self.canvas.xview(*args)
         frac = float(self.canvas.xview()[0])
-        self.tileSource.offset_x = -frac * (self.tileSource.world_width * self.tileSource.zoom)
-        self.draw_tiles()
+        # Adjust the horizontal pan offset.
+        for layer in self.project.layers:
+            if isinstance(layer, tiles.RasterTileSource):
+                self.project.offset_x = -frac * (layer.world_width * self.project.zoom)
+                break
+        self.redraw()
 
     def scroll_y(self, *args):
         self.canvas.yview(*args)
         frac = float(self.canvas.yview()[0])
-        self.tileSource.offset_y = -frac * (self.tileSource.world_height * self.tileSource.zoom)
-        self.draw_tiles()
+        # Adjust the vertical pan offset.
+        for layer in self.project.layers:
+            if isinstance(layer, tiles.RasterTileSource):
+                self.project.offset_y = -frac * (layer.world_height * self.project.zoom)
+                break
+        self.redraw()
 
     def start_pan(self, event):
         self.drag_start = (event.x, event.y)
@@ -106,40 +105,59 @@ class MapViewer(tk.Frame):
         if self.drag_start:
             dx = event.x - self.drag_start[0]
             dy = event.y - self.drag_start[1]
-            self.tileSource.offset_x += dx
-            self.tileSource.offset_y += dy
+            self.project.offset_x += dx
+            self.project.offset_y += dy
             self.drag_start = (event.x, event.y)
-            self.draw_tiles()
+            self.redraw()
 
     def zoom_handler(self, event):
-        old_zoom = self.tileSource.zoom
-        new_zoom = self.tileSource.zoom * (1.1 if event.delta > 0 else 0.9)
+        old_zoom = self.project.zoom
+        new_zoom = self.project.zoom * (1.1 if event.delta > 0 else 0.9)
         new_zoom = max(0.1, min(8.0, new_zoom))
 
         # Calculate mouse position in canvas coordinates.
         cx = self.canvas.canvasx(event.x)
         cy = self.canvas.canvasy(event.y)
-        # Convert these to game coordinates (world coordinates).
-        game_x = (cx - self.tileSource.offset_x) / old_zoom + self.tileSource.min_x
-        game_z = (cy - self.tileSource.offset_y) / old_zoom + self.tileSource.min_z
+        # Convert these to world coordinates using the old zoom and pan.
+        for layer in self.project.layers:
+            if isinstance(layer, tiles.RasterTileSource):
+                game_x = (cx - self.project.offset_x) / old_zoom + layer.min_x
+                game_z = (cy - self.project.offset_y) / old_zoom + layer.min_z
 
-        # Adjust offsets so the game coordinate under the mouse stays fixed.
-        self.tileSource.offset_x = cx - new_zoom * (game_x - self.tileSource.min_x)
-        self.tileSource.offset_y = cy - new_zoom * (game_z - self.tileSource.min_z)
-        self.tileSource.zoom = new_zoom
-        self.draw_tiles()
+                # Adjust offsets so that the game coordinate under the mouse remains fixed.
+                self.project.offset_x = cx - new_zoom * (game_x - layer.min_x)
+                self.project.offset_y = cy - new_zoom * (game_z - layer.min_z)
+                break
+        self.project.zoom = new_zoom
+        self.redraw()
 
     def update_cursor_position(self, event):
-        cx = self.canvas.canvasx(event.x)
-        cy = self.canvas.canvasy(event.y)
-        world_x = int((cx - self.tileSource.offset_x) / self.tileSource.zoom + self.tileSource.min_x)
-        world_z = int((cy - self.tileSource.offset_y) / self.tileSource.zoom + self.tileSource.min_z)
-        self.coord_label.config(text=f"Cursor at: X={world_x}, Z={world_z}")
+        # Display the cursor's world coordinates based on the first RasterTileSource found.
+        for layer in self.project.layers:
+            if isinstance(layer, tiles.RasterTileSource):
+                cx = self.canvas.canvasx(event.x)
+                cy = self.canvas.canvasy(event.y)
+                # Add 0.5 so that the result rounds to the block centre
+                world_x = int((cx - self.project.offset_x) / self.project.zoom + layer.min_x + 0.5)
+                world_z = int((cy - self.project.offset_y) / self.project.zoom + layer.min_z + 0.5)
+                self.coord_label.config(text=f"Cursor at: X={world_x}, Z={world_z}")
+                break
+
 
 def main():
     root = tk.Tk()
-    folder = r"abc"  # Replace with your actual tile folder path.
-    viewer = MapViewer(root, folder)
+    # Replace with your actual tile folder path.
+    tile_folder = r"D:\users\samro\AppData\Roaming\ModrinthApp\profiles\Miners Online\map exports\2025-04-11_19.16.07"
+    # Create the raster tile layer.
+    import tiles
+    raster_layer = tiles.RasterTileSource(tile_folder)
+    
+    # Create a project and add layers.
+    from project import Project
+    project = Project("Map Project")
+    project.add_layer(raster_layer)
+    
+    viewer = MapViewer(root, project)
     viewer.pack(fill=tk.BOTH, expand=True)
     root.mainloop()
 
