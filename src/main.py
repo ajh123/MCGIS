@@ -5,6 +5,7 @@ import tiles  # For RasterTileSource type checking
 from project import Project
 from layer_editor import LayerListDialog
 from geojson_layer import GeoJSONLayer
+from utils.pos_transformer import minecraft_to_wgs84_via_proj
 
 class ProjectManager:
     def __init__(self):
@@ -138,8 +139,8 @@ class MapViewer(tk.Frame):
         self.coord_label.pack(side=tk.BOTTOM, fill=tk.X)
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self.canvas.bind("<ButtonPress-1>", self.start_pan)
-        self.canvas.bind("<B1-Motion>", self.do_pan)
+        self.canvas.bind("<ButtonPress-2>", self.start_pan)
+        self.canvas.bind("<B2-Motion>", self.do_pan)
         self.canvas.bind("<MouseWheel>", self.zoom_handler)
         self.canvas.bind("<Motion>", self.update_cursor_position)
         self.bind("<Configure>", lambda e: self.redraw())
@@ -296,7 +297,11 @@ class MapViewer(tk.Frame):
             # Add 0.5 so that the result rounds to the block centre
             world_x = int((cx - self.project.offset_x) / self.project.zoom + self.project.min_x + 0.5)
             world_z = int((cy - self.project.offset_y) / self.project.zoom + self.project.min_z + 0.5)
-            self.coord_label.config(text=f"Cursor at: X={world_x}, Z={world_z}")
+
+            lat, lon = minecraft_to_wgs84_via_proj(world_x, world_z)
+
+            label = f"Cursor at: X={world_x}, Z={world_z} - Lat={lat:.6f}, Lon={lon:.6f}"
+            self.coord_label.config(text=label)
 
 
 def main():
